@@ -1,0 +1,8 @@
+{
+  "name": "synthetiq-infra",
+  "private": true,
+  "description": "Synthetiq BYOI infrastructure config",
+  "devDependencies": {
+    "@synthetiq/cli": "2.3.0"
+  }
+}

@@ -1,0 +1,23 @@
+name: synthetiq-infra
+
+on:
+  pull_request:
+    paths: ["_infra/**"]
+  push:
+    branches: [main]
+    paths: ["_infra/**"]
+
+permissions:
+  id-token: write       # OIDC tokens for AWS and Synthetiq
+  contents: write       # plan commits the reviewed changeset to the PR branch
+  pull-requests: write  # the plan comment
+
+jobs:
+  infra:
+    uses: SynthetiqAI/infra-workflow/.github/workflows/plan-apply.yml@v1
+    with:
+      # Fill these in (see README):
+      plan-role-arn: arn:aws:iam::111122223333:role/synthetiq-infra-plan
+      apply-role-arn: arn:aws:iam::111122223333:role/synthetiq-infra-apply
+      organization-id: "<your-org-id>"
+    secrets: inherit   # forwards the SYNTHETIQ_NPM_KEY repo secret
