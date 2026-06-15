@@ -1,11 +1,13 @@
 name: synthetiq-infra
 
 on:
+  # The CLI pin in package.json is a generation input — bumping it changes the
+  # rendered template (CliVersion) — so it triggers a regenerate-and-plan too.
   pull_request:
-    paths: ["_infra/**"]
+    paths: ["_infra/**", "package.json", "package-lock.json"]
   push:
     branches: [main]
-    paths: ["_infra/**"]
+    paths: ["_infra/**", "package.json", "package-lock.json"]
 
 permissions:
   id-token: write       # OIDC tokens for AWS and Synthetiq
