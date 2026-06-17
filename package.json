@@ -3,6 +3,6 @@
   "private": true,
   "description": "Synthetiq BYOI infrastructure config",
   "devDependencies": {
-    "@synthetiq/cli": "2.6.3"
+    "@synthetiq/cli": "2.6.4"
   }
 }
