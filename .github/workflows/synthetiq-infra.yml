@@ -3,6 +3,10 @@ name: synthetiq-infra
 on:
   # The CLI pin in package.json is a generation input — bumping it changes the
   # rendered template (CliVersion) — so it triggers a regenerate-and-plan too.
+  #
+  # Nesting the infra root? Prefix every path here with the same directory you
+  # pass as `working-directory` below (e.g. "partner/synthetiq/_infra/**"). These
+  # are static globs — they can't read the input, so they must match by hand.
   pull_request:
     paths: ["_infra/**", "package.json", "package-lock.json"]
   push:
@@ -22,4 +26,8 @@ jobs:
       plan-role-arn: arn:aws:iam::111122223333:role/synthetiq-infra-plan
       apply-role-arn: arn:aws:iam::111122223333:role/synthetiq-infra-apply
       organization-id: "<your-org-id>"
+      # Uncomment to nest the infra root below the repo root. Point this at the
+      # directory holding package.json, .npmrc, and _infra/, and prefix the
+      # trigger `paths:` above to match (see README → "Nested layout").
+      # working-directory: partner/synthetiq
     secrets: inherit   # forwards the SYNTHETIQ_NPM_KEY repo secret
