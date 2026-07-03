@@ -41,3 +41,44 @@ your own repo, then follow the steps below. Full background:
    ```
 
 Open a PR to see the plan; merge to apply.
+
+## Nested layout
+
+By default the infra root sits at the repo root. To keep it under a subdirectory
+of a larger repo — e.g. a shared infrastructure monorepo:
+
+```
+your-repo/
+└── partner/
+    └── synthetiq/          ← the infra root
+        ├── package.json
+        ├── package-lock.json
+        ├── .npmrc
+        └── _infra/
+            └── synthetiq.yaml
+```
+
+Move `package.json`, `package-lock.json`, `.npmrc`, and `_infra/` together into
+that directory (they resolve as a unit), then make two edits in
+`.github/workflows/synthetiq-infra.yml`:
+
+1. **Set `working-directory`** in the `with:` block to that directory:
+   ```yaml
+   with:
+     ...
+     working-directory: partner/synthetiq
+   ```
+2. **Prefix the trigger `paths:`** with the same directory. GitHub Actions path
+   filters are static globs — they can't read the input, so they must be edited
+   by hand or CI won't run on your config changes:
+   ```yaml
+   pull_request:
+     paths: ["partner/synthetiq/_infra/**", "partner/synthetiq/package.json", "partner/synthetiq/package-lock.json"]
+   push:
+     branches: [main]
+     paths: ["partner/synthetiq/_infra/**", "partner/synthetiq/package.json", "partner/synthetiq/package-lock.json"]
+   ```
+
+Run the CLI (`npm install`, `synthetiq infra init`, etc.) from inside that
+directory — it discovers `_infra/` by walking up, so any cwd at or below the
+infra root works.
