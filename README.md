@@ -21,8 +21,28 @@ your own repo, then follow the steps below. Full background:
    ```
 2. **Add the repo secret** `SYNTHETIQ_NPM_KEY` (Settings → Secrets and variables → Actions).
 3. **Create the two AWS roles** trusting GitHub OIDC for this repo:
-   - plan — `repo:<owner>/<repo>:pull_request`, policy from `synthetiq infra permissions --stage generate`
-   - apply — `repo:<owner>/<repo>:ref:refs/heads/main`, policy from `synthetiq infra permissions --stage provision`
+   - plan — subject `repo:<owner>/<repo>:pull_request`, policy from `synthetiq infra permissions --stage generate`
+   - apply — subject `repo:<owner>/<repo>:ref:refs/heads/main`, policy from `synthetiq infra permissions --stage provision`
+
+   > **Check which subject your organization sends.** Some GitHub organizations emit
+   > *ID-qualified* subject claims, appending the numeric org and repo ids:
+   > `repo:<owner>@<org-id>/<repo>@<repo-id>:pull_request`. IAM compares the subject
+   > exactly, so a trust built from the plain form is denied with a bare
+   > `Not authorized to perform sts:AssumeRoleWithWebIdentity` — the Actions log never
+   > says a claim comparison is what failed. List **both** forms in the trust policy's
+   > `StringEquals` condition (a list is an OR, and both are exact strings, so this
+   > widens nothing) and the role works whichever form your org sends:
+   >
+   > ```json
+   > "token.actions.githubusercontent.com:sub": [
+   >   "repo:<owner>@<org-id>/<repo>@<repo-id>:pull_request",
+   >   "repo:<owner>/<repo>:pull_request"
+   > ]
+   > ```
+   >
+   > To read the subject your org actually sends, look at the CloudTrail
+   > `AssumeRoleWithWebIdentity` event for the failed attempt — the full presented
+   > subject is in `userIdentity.principalId`.
 4. **Create the Synthetiq service account + trust** for the apply identity:
    ```bash
    synthetiq role list   # id of "CI Provision Apply"
@@ -31,6 +51,20 @@ your own repo, then follow the steps below. Full background:
      --service-account-id <service-account-id> \
      --issuer https://token.actions.githubusercontent.com \
      --subject "repo:<owner>/<repo>:ref:refs/heads/main"
+   ```
+
+   The subject caveat from step 3 applies here too, with a different error. If your
+   organization sends ID-qualified claims, the token exchange fails with
+   `invalid_grant: No OIDC trust is configured for this issuer and subject in the
+   specified organization`. Create a second trust on the same service account for the
+   ID-qualified form — one trust per (issuer, subject) pair, both mapping to the same
+   service account:
+
+   ```bash
+   synthetiq trust create \
+     --service-account-id <service-account-id> \
+     --issuer https://token.actions.githubusercontent.com \
+     --subject "repo:<owner>@<org-id>/<repo>@<repo-id>:ref:refs/heads/main"
    ```
 5. **Fill in** `plan-role-arn`, `apply-role-arn`, and `organization-id` in
    `.github/workflows/synthetiq-infra.yml`.
