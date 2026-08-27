@@ -30,4 +30,9 @@ jobs:
       # directory holding package.json, .npmrc, and _infra/, and prefix the
       # trigger `paths:` above to match (see README → "Nested layout").
       # working-directory: partner/synthetiq
-    secrets: inherit   # forwards the SYNTHETIQ_NPM_KEY repo secret
+    secrets:
+      # Passed explicitly rather than `secrets: inherit`. The reusable workflow
+      # lives in another organization (SynthetiqAI), and inherit does not reach
+      # it from your org — the call fails its required-secret check before any
+      # job starts, reporting the error against the `uses:` line above.
+      SYNTHETIQ_NPM_KEY: ${{ secrets.SYNTHETIQ_NPM_KEY }}
