@@ -116,3 +116,10 @@ that directory (they resolve as a unit), then make two edits in
 Run the CLI (`npm install`, `synthetiq infra init`, etc.) from inside that
 directory — it discovers `_infra/` by walking up, so any cwd at or below the
 infra root works.
+
+## Multiple regions
+
+To provision more than one region in the same account, give each region its own
+infra root under `<account-id>/<region>/`, and add a `strategy.matrix` over each
+cell's `working-directory` so one workflow provisions them all. See
+[Multiple regions](https://www.synthetiq.com/docs/platform-docs/deployments/byoi/multiple-regions).
