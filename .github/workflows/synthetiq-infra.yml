@@ -20,6 +20,13 @@ permissions:
 
 jobs:
   infra:
+    # Multiple regions? Give each region its own infra root under
+    # <account-id>/<region>/ and matrix over them, then set working-directory
+    # below to ${{ matrix.working-directory }} (see README → "Multiple regions"):
+    # strategy:
+    #   fail-fast: false
+    #   matrix:
+    #     working-directory: [111122223333/us-east-1, 111122223333/ap-southeast-2]
     uses: SynthetiqAI/infra-workflow/.github/workflows/plan-apply.yml@v1
     with:
       # Fill these in (see README):
