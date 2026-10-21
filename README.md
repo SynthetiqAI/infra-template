@@ -22,7 +22,7 @@ your own repo, then follow the steps below. Full background:
 2. **Add the repo secret** `SYNTHETIQ_NPM_KEY` (Settings → Secrets and variables → Actions).
 3. **Create the two AWS roles** trusting GitHub OIDC for this repo:
    - plan — subject `repo:<owner>/<repo>:pull_request`, policy from `synthetiq infra permissions --stage generate`
-   - apply — subject `repo:<owner>/<repo>:ref:refs/heads/main`, policy from `synthetiq infra permissions --stage provision`
+   - apply — subject `repo:<owner>/<repo>:ref:refs/heads/main`, the managed policies from `synthetiq infra permissions --stage provision --out-dir policies`, each attached (the full policy is too large for an inline policy)
 
    > **Check which subject your organization sends.** Some GitHub organizations emit
    > *ID-qualified* subject claims, appending the numeric org and repo ids:
