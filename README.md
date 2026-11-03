@@ -9,6 +9,8 @@ your own repo, then follow the steps below. Full background:
 
 - `.github/workflows/synthetiq-infra.yml` — calls the reusable
   [`SynthetiqAI/infra-workflow`](https://github.com/SynthetiqAI/infra-workflow) workflow.
+- `.github/workflows/update-synthetiq-cli.yml` — moves the pinned `@synthetiq/cli` to a
+  newer version when you run it (see [Updating the CLI](#updating-the-cli)).
 - `package.json` + `.npmrc` — pin `@synthetiq/cli` from the Synthetiq private registry.
 - `_infra/` — your config lives here (created by `synthetiq infra init`).
 
@@ -76,6 +78,25 @@ your own repo, then follow the steps below. Full background:
 
 Open a PR to see the plan; merge to apply.
 
+## Updating the CLI
+
+A new `@synthetiq/cli` version can change your infrastructure, so an update goes
+through a pull request like any other change:
+
+1. In the **Actions** tab, pick **Update Synthetiq CLI** and click **Run workflow**.
+   Leave the version empty for the latest release.
+2. Open the finished run. Its summary lists any AWS permission changes the new
+   version needs, with the full policy for each role. Update those roles in IAM first.
+3. Click **Open the pull request** in the summary. The plan runs on it; merge it to
+   apply the update.
+
+The run pushes a branch but doesn't open the pull request itself. GitHub doesn't
+start workflows for a pull request that a workflow opens, so the plan would never run.
+
+Created your repo before this workflow existed? Copy
+[`update-synthetiq-cli.yml`](.github/workflows/update-synthetiq-cli.yml) into your
+repo's `.github/workflows/` folder.
+
 ## Nested layout
 
 By default the infra root sits at the repo root. To keep it under a subdirectory
@@ -113,6 +134,9 @@ that directory (they resolve as a unit), then make two edits in
      paths: ["partner/synthetiq/_infra/**", "partner/synthetiq/package.json", "partner/synthetiq/package-lock.json"]
    ```
 
+Also set `INFRA_ROOTS` in `.github/workflows/update-synthetiq-cli.yml` to the same
+directory, so [updates](#updating-the-cli) find your `package.json`.
+
 Run the CLI (`npm install`, `synthetiq infra init`, etc.) from inside that
 directory — it discovers `_infra/` by walking up, so any cwd at or below the
 infra root works.
@@ -123,3 +147,7 @@ To provision more than one region in the same account, give each region its own
 infra root under `<account-id>/<region>/`, and add a `strategy.matrix` over each
 cell's `working-directory` so one workflow provisions them all. See
 [Multiple regions](https://www.synthetiq.com/docs/platform-docs/deployments/byoi/multiple-regions).
+
+List every cell's directory under `INFRA_ROOTS` in
+`.github/workflows/update-synthetiq-cli.yml`. An [update](#updating-the-cli) then
+moves all of them to the new version in one pull request.

@@ -1,0 +1,293 @@
+# Moves this repo's pinned @synthetiq/cli to a newer version.
+#
+# Run it from the Actions tab: "Update Synthetiq CLI" > Run workflow. Leave the
+# version empty for the latest release. The run pushes a branch with the update,
+# lists any AWS permission changes the new version needs, and links to open the
+# pull request. Opening it runs the usual plan; merging it applies the update.
+#
+# The run doesn't open the pull request itself on purpose: GitHub doesn't start
+# other workflows for a pull request opened with the built-in token, so the plan
+# would never run. A pull request you open runs it like any other.
+name: Update Synthetiq CLI
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version to move to (leave empty for the latest)
+        required: false
+        default: ""
+
+permissions:
+  contents: write # push the update branch
+
+concurrency:
+  group: synthetiq-cli-update
+  cancel-in-progress: false
+
+env:
+  # The folders holding package.json, .npmrc and _infra/, one per line. If you
+  # nested them or run several regions, list the same folders as
+  # working-directory in synthetiq-infra.yml. They're all updated together.
+  INFRA_ROOTS: |
+    .
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+
+      - name: Update @synthetiq/cli on a new branch
+        env:
+          SYNTHETIQ_NPM_KEY: ${{ secrets.SYNTHETIQ_NPM_KEY }}
+          REQUESTED_VERSION: ${{ inputs.version }}
+          BASE_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${SYNTHETIQ_NPM_KEY:-}" ]; then
+            echo "::error::This repository has no SYNTHETIQ_NPM_KEY secret (Settings > Secrets and variables > Actions)."
+            exit 1
+          fi
+
+          roots=()
+          while IFS= read -r root; do
+            if [ -n "$root" ]; then roots+=("$root"); fi
+          done < <(printf '%s\n' "$INFRA_ROOTS" | sed -e 's/#.*//' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+          if [ "${#roots[@]}" -eq 0 ]; then
+            echo "::error::INFRA_ROOTS doesn't list any folders."
+            exit 1
+          fi
+          for root in "${roots[@]}"; do
+            if [ ! -f "$root/package.json" ]; then
+              echo "::error::There's no package.json in $root. Check INFRA_ROOTS in this workflow."
+              exit 1
+            fi
+          done
+
+          # A folder's own copy of the CLI, never one npx might fetch from the public registry.
+          cli() { (cd "$1" && ./node_modules/.bin/synthetiq "${@:2}"); }
+          # Older CLIs have no --version, so read the installed package instead.
+          installed_version() {
+            node -p "require(require('path').resolve(process.argv[1], 'node_modules/@synthetiq/cli/package.json')).version" "$1"
+          }
+
+          target="${REQUESTED_VERSION:-}"
+          if [ -z "$target" ]; then
+            target="$(cd "${roots[0]}" && npm view @synthetiq/cli version)"
+          fi
+          if ! [[ "$target" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::The version must look like 2.15.5."
+            exit 1
+          fi
+          if [ -z "$(cd "${roots[0]}" && npm view "@synthetiq/cli@$target" version 2> /dev/null)" ]; then
+            echo "::error::@synthetiq/cli $target doesn't exist."
+            exit 1
+          fi
+
+          # Install what each folder is on now, and keep its AWS policies to compare.
+          dir="$RUNNER_TEMP/synthetiq-cli-update"
+          mkdir -p "$dir"
+          : > "$dir/cells.tsv"
+          outdated=false
+          for i in "${!roots[@]}"; do
+            root="${roots[$i]}"
+            if [ -f "$root/package-lock.json" ]; then
+              (cd "$root" && npm ci --no-audit --no-fund)
+            else
+              (cd "$root" && npm install --no-audit --no-fund)
+            fi
+            if [ ! -f "$root/node_modules/@synthetiq/cli/package.json" ]; then
+              echo "::error::@synthetiq/cli isn't in $root/package.json."
+              exit 1
+            fi
+            from="$(installed_version "$root")"
+            printf '%s\t%s\n' "$root" "$from" >> "$dir/cells.tsv"
+            if [ "$from" != "$target" ]; then outdated=true; fi
+            for stage in provision generate; do
+              cli "$root" infra permissions --stage "$stage" > "$dir/old-$i-$stage.json" 2> /dev/null || rm -f "$dir/old-$i-$stage.json"
+            done
+          done
+          if [ "$outdated" = false ]; then
+            echo "@synthetiq/cli is already on $target. Nothing to update." | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          branch="synthetiq-cli-$target"
+          if git ls-remote --exit-code --heads origin "$branch" > /dev/null; then
+            echo "::error::Branch $branch already exists. Open or merge its pull request, or delete the branch and run this again."
+            exit 1
+          fi
+
+          for root in "${roots[@]}"; do
+            (cd "$root" && npm install -E "@synthetiq/cli@$target" --no-audit --no-fund)
+            installed="$(installed_version "$root")"
+            if [ "$installed" != "$target" ]; then
+              echo "::error::Expected @synthetiq/cli $target in $root after installing, but found $installed."
+              exit 1
+            fi
+          done
+          for stage in provision generate; do
+            cli "${roots[0]}" infra permissions --stage "$stage" > "$dir/new-$stage.json"
+          done
+
+          node - "$dir" "$target" "$BASE_BRANCH" "$branch" <<'NODE'
+          const fs = require('fs');
+          const path = require('path');
+
+          const [dir, to, base, branch] = process.argv.slice(2);
+          const { GITHUB_SERVER_URL: server, GITHUB_REPOSITORY: repo, GITHUB_RUN_ID: runId } = process.env;
+
+          const cells = fs
+            .readFileSync(path.join(dir, 'cells.tsv'), 'utf8')
+            .trim()
+            .split('\n')
+            .map((line) => {
+              const [root, from] = line.split('\t');
+              return { root, from };
+            });
+          const froms = [...new Set(cells.map((cell) => cell.from))];
+
+          // A policy file's text, or null when it's missing or not a policy.
+          const read = (file) => {
+            try {
+              const text = fs.readFileSync(path.join(dir, file), 'utf8');
+              JSON.parse(text);
+              return text;
+            } catch {
+              return null;
+            }
+          };
+          const actionsOf = (policy) =>
+            new Set(JSON.parse(policy).Statement.flatMap((s) => [].concat(s.Action ?? [])));
+          const code = (list) => list.map((a) => `\`${a}\``).join(', ');
+
+          const roles = [
+            { stage: 'provision', label: 'Apply role', input: 'apply-role-arn' },
+            { stage: 'generate', label: 'Plan role', input: 'plan-role-arn' },
+          ];
+
+          const iam = [];
+          const prLines = [];
+          let rolesToUpdate = 0;
+          for (const role of roles) {
+            const after = read(`new-${role.stage}.json`);
+            if (after === null) {
+              throw new Error(`@synthetiq/cli ${to} didn't print a ${role.stage} policy.`);
+            }
+            const befores = cells.map((cell, i) => ({ from: cell.from, text: read(`old-${i}-${role.stage}.json`) }));
+            if (befores.every((before) => before.text === after)) {
+              iam.push(`**${role.label}**: no changes.`, '');
+              prLines.push(`- ${role.label}: no AWS permission changes.`);
+              continue;
+            }
+            rolesToUpdate++;
+            const now = actionsOf(after);
+            const added = new Set();
+            const removed = new Set();
+            const unknown = new Set();
+            for (const before of befores) {
+              if (before.text === null) {
+                unknown.add(before.from);
+                continue;
+              }
+              const old = actionsOf(before.text);
+              for (const a of now) if (!old.has(a)) added.add(a);
+              for (const a of old) if (!now.has(a)) removed.add(a);
+            }
+            let change;
+            if (unknown.size) {
+              change = `couldn't compare with the policy from ${[...unknown].join(', ')}, so replace the whole policy with this one`;
+            } else {
+              const parts = [];
+              if (added.size) parts.push(`adds ${code([...added])}`);
+              if (removed.size) parts.push(`removes ${code([...removed])}`);
+              change = `the new policy ${parts.length ? parts.join('; ') : 'changes which resources it covers'}`;
+            }
+            iam.push(
+              `**${role.label}** (\`${role.input}\` in synthetiq-infra.yml): ${change}.`,
+              '',
+              `<details><summary>New ${role.label.toLowerCase()} policy</summary>`,
+              '',
+              '```json',
+              after.trimEnd(),
+              '```',
+              '',
+              '</details>',
+              '',
+            );
+            prLines.push(`- [ ] ${role.label}: new policy from the update run applied in AWS`);
+          }
+
+          const cellLines =
+            cells.length > 1
+              ? cells.map((cell) => `- \`${cell.root}\`: ${cell.from === to ? `already on ${to}` : `${cell.from} → ${to}`}`)
+              : [];
+          const title =
+            froms.length === 1 ? `Bump @synthetiq/cli from ${froms[0]} to ${to}` : `Bump @synthetiq/cli to ${to}`;
+          const runUrl = `${server}/${repo}/actions/runs/${runId}`;
+          const body = [
+            `Moves @synthetiq/cli to ${to}.`,
+            '',
+            ...(cellLines.length ? [...cellLines, ''] : []),
+            ...prLines,
+            '',
+            `Created by ${runUrl}`,
+          ].join('\n');
+          const prUrl =
+            `${server}/${repo}/compare/${base}...${branch}?quick_pull=1` +
+            `&title=${encodeURIComponent(title)}&body=${encodeURIComponent(body)}`;
+
+          const steps = [];
+          if (rolesToUpdate) {
+            steps.push('In AWS IAM, replace the policy on each role marked below with its new policy. Do this before opening the pull request.');
+          }
+          steps.push(`[Open the pull request](${prUrl}), then click **Create pull request**. The plan runs on it.`);
+          steps.push('Merge it once the plan is green. Merging applies the update to your AWS account.');
+
+          const out = [
+            froms.length === 1 ? `## @synthetiq/cli ${froms[0]} → ${to}` : `## @synthetiq/cli → ${to}`,
+            '',
+            ...(cellLines.length ? [...cellLines, ''] : []),
+            `The update is on the \`${branch}\` branch.`,
+            '',
+            ...steps.map((step, i) => `${i + 1}. ${step}`),
+            '',
+          ];
+          if (rolesToUpdate) {
+            out.push('### AWS permission changes', '', ...iam);
+          } else {
+            out.push('This version needs no AWS permission changes.', '');
+          }
+          out.push(
+            '### The CLI on your own computer',
+            '',
+            'If you also use the Synthetiq CLI on your computer, update it to match:',
+            '',
+            '```',
+            `npm install -g "@synthetiq/cli@${to}" "--@synthetiq:registry=https://api.synthetiq.com/api/npm/" "--//api.synthetiq.com/api/npm/:_authToken=<your npm key>"`,
+            '```',
+          );
+          fs.writeFileSync(path.join(dir, 'title.txt'), title);
+          fs.writeFileSync(path.join(dir, 'summary.md'), out.join('\n') + '\n');
+          NODE
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "$branch"
+          for root in "${roots[@]}"; do
+            git add "$root/package.json" "$root/package-lock.json"
+          done
+          git commit -m "$(cat "$dir/title.txt")"
+          git push origin "$branch"
+
+          cat "$dir/summary.md" >> "$GITHUB_STEP_SUMMARY"
+          cat "$dir/summary.md"
