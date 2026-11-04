@@ -175,6 +175,35 @@ jobs:
             { stage: 'generate', label: 'Plan role', input: 'plan-role-arn' },
           ];
 
+          // Name each role exactly, from the ARNs the plan/apply workflow uses. The
+          // stacks create roles of their own with similar names, and a policy pasted
+          // into one of those breaks deploys.
+          const workflowText = (() => {
+            try {
+              return fs
+                .readdirSync('.github/workflows')
+                .filter((name) => /\.ya?ml$/.test(name))
+                .map((name) => fs.readFileSync(path.join('.github/workflows', name), 'utf8'))
+                .join('\n');
+            } catch {
+              return '';
+            }
+          })();
+          for (const role of roles) {
+            const arn = new RegExp(`^\\s*${role.input}:\\s*["']?arn:(aws[\\w-]*):iam::\\d{12}:role/([\\w+=,.@/-]+)`, 'm');
+            const match = workflowText.match(arn);
+            if (!match) continue;
+            role.name = match[2].split('/').pop();
+            if (match[1] === 'aws') {
+              role.link = `https://console.aws.amazon.com/iam/home#/roles/details/${encodeURIComponent(role.name)}?section=permissions`;
+            }
+          }
+          const roleTitle = (role) => (role.name ? `${role.label} \`${role.name}\`` : role.label);
+          const roleWhere = (role) => {
+            if (role.link) return ` ([open it in IAM](${role.link}))`;
+            return role.name ? '' : ` (\`${role.input}\` in synthetiq-infra.yml)`;
+          };
+
           const iam = [];
           const prLines = [];
           let rolesToUpdate = 0;
@@ -185,8 +214,8 @@ jobs:
             }
             const befores = cells.map((cell, i) => ({ from: cell.from, text: read(`old-${i}-${role.stage}.json`) }));
             if (befores.every((before) => before.text === after)) {
-              iam.push(`**${role.label}**: no changes.`, '');
-              prLines.push(`- ${role.label}: no AWS permission changes.`);
+              iam.push(`**${roleTitle(role)}**: no changes.`, '');
+              prLines.push(`- ${roleTitle(role)}: no AWS permission changes.`);
               continue;
             }
             rolesToUpdate++;
@@ -213,7 +242,7 @@ jobs:
               change = `the new policy ${parts.length ? parts.join('; ') : 'changes which resources it covers'}`;
             }
             iam.push(
-              `**${role.label}** (\`${role.input}\` in synthetiq-infra.yml): ${change}.`,
+              `**${roleTitle(role)}**${roleWhere(role)}: ${change}.`,
               '',
               `<details><summary>New ${role.label.toLowerCase()} policy</summary>`,
               '',
@@ -224,7 +253,7 @@ jobs:
               '</details>',
               '',
             );
-            prLines.push(`- [ ] ${role.label}: new policy from the update run applied in AWS`);
+            prLines.push(`- [ ] ${roleTitle(role)}: new policy from the update run applied in AWS`);
           }
 
           const cellLines =
@@ -252,6 +281,7 @@ jobs:
           }
           steps.push(`[Open the pull request](${prUrl}), then click **Create pull request**. The plan runs on it.`);
           steps.push('Merge it once the plan is green. Merging applies the update to your AWS account.');
+          steps.push('If the apply job fails on missing permissions, fix the role its log names, then click **Re-run failed jobs** on that run.');
 
           const out = [
             froms.length === 1 ? `## @synthetiq/cli ${froms[0]} → ${to}` : `## @synthetiq/cli → ${to}`,
@@ -263,7 +293,13 @@ jobs:
             '',
           ];
           if (rolesToUpdate) {
-            out.push('### AWS permission changes', '', ...iam);
+            out.push(
+              '### AWS permission changes',
+              '',
+              'Change only the roles named here. The Synthetiq stacks create other roles whose names also start with `Synthetiq` (like `SynthetiqCodeBuildInfraDeployRole`), and replacing one of their policies breaks deploys.',
+              '',
+              ...iam,
+            );
           } else {
             out.push('This version needs no AWS permission changes.', '');
           }

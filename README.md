@@ -85,10 +85,12 @@ through a pull request like any other change:
 
 1. In the **Actions** tab, pick **Update Synthetiq CLI** and click **Run workflow**.
    Leave the version empty for the latest release.
-2. Open the finished run. Its summary lists any AWS permission changes the new
-   version needs, with the full policy for each role. Update those roles in IAM first.
+2. Open the finished run. Its summary names each role whose policy changes, links
+   to it in IAM, and gives the full new policy. Update those roles first, and only
+   those: the Synthetiq stacks create other roles with similar names.
 3. Click **Open the pull request** in the summary. The plan runs on it; merge it to
-   apply the update.
+   apply the update. If the apply job fails on missing permissions, fix the role it
+   names and click **Re-run failed jobs**.
 
 The run pushes a branch but doesn't open the pull request itself. GitHub doesn't
 start workflows for a pull request that a workflow opens, so the plan would never run.
